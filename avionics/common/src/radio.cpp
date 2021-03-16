@@ -48,8 +48,8 @@
 #endif
 
 namespace {
-constexpr uint64_t kFlaregunAddrMsb = 0x0013A200;
-constexpr uint64_t kFlaregunAddrLsb = 0x41678FC0;
+constexpr uint32_t kDefaultFlaregunAddrMsb = 0x0013A200;
+constexpr uint32_t kDefaultFlaregunAddrLsb = 0x41678FC0;
 constexpr uint32_t kRadioBaudRate = 921600;
 constexpr uint8_t kMaxPacketsPerRxLoop = 8;
 constexpr int kMaxQueuedBytes = 800;
@@ -92,17 +92,18 @@ class Radio::RadioMembers {
 
   public:
     RadioMembers()
-        : gnd_addr_(kFlaregunAddrMsb, kFlaregunAddrLsb),
-          tx_q_(kPacketPayloadSpace, kMaxQueuedBytes, kMaxQueuedSubpkts) {}
+        : tx_q_(kPacketPayloadSpace, kMaxQueuedBytes, kMaxQueuedSubpkts),
+          tx_packet_(
+              XBeeAddress64(kDefaultFlaregunAddrMsb, kDefaultFlaregunAddrLsb),
+              payload_, kPacketPayloadSpace) {}
 
   private:
-    XBee xbee_;
-    XBeeAddress64 gnd_addr_;
-    ZBTxRequest tx_packet_;
-    ZBRxResponse rx;
-
     roar::Buffer tx_q_; // the [ueue] is silent :)
     uint8_t payload_[kPacketPayloadSpace];
+
+    XBee xbee_;
+    ZBTxRequest tx_packet_;
+    ZBRxResponse rx;
 };
 static Radio::RadioMembers self;
 
@@ -115,8 +116,7 @@ void Radio::initialize() {
     while (!serial)
         ;
     self.xbee_.setSerial(serial.getSerial());
-    self.tx_packet_.setAddress64(self.gnd_addr_);
-    self.tx_packet_.setPayload(self.payload_);
+
     Radio::sendMessage(Hal::millis(), "Radio initialized");
     Radio::send();
 }
@@ -255,4 +255,8 @@ Radio::fwd_cmd_t Radio::readPacket(command_t *&command_dat_out,
     }
     result |= STOP_PARSE_FLAG;
     return result;
+}
+
+void Radio::updateAddress() {
+    self.tx_packet_.setAddress64(self.rx.getRemoteAddress64());
 }

@@ -21,8 +21,8 @@ struct Rocket {
 
     Rocket()
         : cam(Hal::SerialInst::Camera), datalog(LOG_FILE_NAME),
-          init_status(collectStatus(sensors, ignitors)), calc(sensors, Hal::now_ms()),
-          config(calc, ignitors, cam),
+          init_status(collectStatus(sensors, ignitors)),
+          calc(sensors, Hal::now_ms()), config(calc, ignitors, cam),
           state_machine(config.state_map, config.initial_state) {}
 
     // WARNING - MEMBER ORDER DEPENDENCY
@@ -59,9 +59,7 @@ class CommandReceiver {
             rocket_.state_machine.arm();
             rocket_.cam.start_record();
             break;
-        case 'C':
-            Radio::sendConfig(Hal::millis());
-            break;
+
         case 'D':
             rocket_.state_machine.disarm();
             rocket_.cam.stop_record();
@@ -135,6 +133,7 @@ class CommandReceiver {
                                     rocket_.calc.altitudeBase());
             break;
         default:
+            // TODO: Log invalid command
             break;
         }
     }

@@ -50,6 +50,8 @@ class Radio {
     constexpr static fwd_cmd_t STOP_PARSE_FLAG = 1 << 0;
     constexpr static fwd_cmd_t CAN_SEND_FLAG = 1 << 1;
 
+    constexpr static uint8_t kConfigCommandId = 'C';
+
     static bool can_send_; // Is XBee available to send
 
   public:
@@ -93,6 +95,7 @@ class Radio {
         fwd_cmd_t result;
 
         while (true) {
+            // data & len are out-parameters of readPacket
             command_t *command_data;
             uint8_t command_len;
             result = readPacket(command_data, command_len);
@@ -100,7 +103,14 @@ class Radio {
             if (result & STOP_PARSE_FLAG) {
                 break;
             }
+
             for (int i = 0; i < command_len; ++i) {
+                // Intercept config command
+                if (command_data[i] == kConfigCommandId) {
+                    updateAddress();
+                    sendConfig(Hal::millis());
+                    continue;
+                }
                 command_receiver.run_command(command_data[i]);
             }
         }
@@ -115,17 +125,6 @@ class Radio {
             send();
         }
     }
-
-    // /**
-    //  * @brief Add a subpacket to the queue to be sent. Note that this is a
-    //  * rather low-level utility; there should also be a helper method for any
-    //  * given subpacket that will build up the specific format this needs that
-    //  * you should use instead. Note that due to move semantics you will
-    //  likely
-    //  * need to use std::move(dat).
-    //  * @param dat A SubPktPtr (refer to typedef) containing the data.
-    //  */
-    // static void addSubpacket(SubPktPtr dat);
 
     /**
      * @brief Helper function to send status.
@@ -176,8 +175,6 @@ class Radio {
      */
     static void sendState(const uint32_t time, uint16_t state_id);
 
-    static void sendConfig(const uint32_t time);
-
     /**
      * @brief Helper function to send an event. See radio specification.
      * @param time Timestamp, in milliseconds
@@ -192,6 +189,23 @@ class Radio {
      * by readPacket()
      */
     static int read_count_;
+
+    /**
+     * @brief Sends the config packet. Kept as private since configuration
+     * sending is internal to the radio; the send config command is handled by
+     * the radio and bypasses the general rocket command handler.
+     * @param time Timestamp, in milliseconds
+     */
+
+    static void sendConfig(const uint32_t time);
+
+    /**
+     * @brief Updates the ground station address to use; called in response to
+     * the send config command (which doubles as a request configuration
+     * command). Relies on the interal ZBRxResponse variable `self.rx` to have
+     * been set by the last readPacket command.
+     */
+    static void updateAddress();
 
     /**
      * @brief Helper function for forwardCommand, primarily around to
