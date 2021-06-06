@@ -116,6 +116,7 @@ int main(void) {
     auto &ignitors = rocket.ignitors;
 
     if (init_status == RocketStatus::CRITICAL_FAILURE) {
+        LOG_ERROR("Critical failure; aborting in state machine");
         state_machine.abort();
     }
 
