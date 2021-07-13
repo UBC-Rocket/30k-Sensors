@@ -12,6 +12,8 @@ std::mutex StdIoController::cout_mutex_{};
 std::ofstream StdIoController::out_log_{
     "FW_SIM_log", std::ios_base::out | std::ios_base::binary};
 std::atomic_bool StdIoController::run_input_{true};
+std::mutex StdIoController::blocking_request_mutex_{};
+std::condition_variable StdIoController::blocking_request_cv_{};
 
 void StdIoController::initialize() {
     static bool done = false;

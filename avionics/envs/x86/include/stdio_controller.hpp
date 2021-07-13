@@ -11,6 +11,7 @@
 #include <type_traits>   // for is_same
 #include <unordered_map> // for hash map
 #include <vector>
+#include <condition_variable>
 
 #if defined(WIN32) || defined(_WIN32)
 #define OS_IS_WINDOWS
@@ -39,6 +40,9 @@ class StdIoController {
     static void outputFiltered(uint8_t const c);
     static void output(uint8_t const c);
 
+    static std::mutex blocking_request_mutex_;
+    static std::condition_variable blocking_request_cv_;
+
     enum class PacketIds : uint8_t {
         analog_read = 0x61,
         sensor_read = 0x73,
@@ -59,11 +63,12 @@ class StdIoController {
       public:
         BlockingRequest(const uint8_t stream_id, const uint8_t *const packet,
                         const std::size_t packet_len) {
+            std::unique_lock<std::mutex> lock(blocking_request_mutex_);
             // input_ will now run at most once more
             StdIoController::run_input_ = false;
             // ensures that at least one more SIM packet exists
             StdIoController::putPacket(stream_id, packet, packet_len);
-            input_.join(); // so this won't block
+            blocking_request_cv_.wait(lock);
 
             // Keep polling for new packet until response is received.
             while (istreams_[stream_id].size() == 0) {
@@ -77,8 +82,8 @@ class StdIoController {
 
         ~BlockingRequest() {
             StdIoController::run_input_ = true;
-            std::thread input{&StdIoController::inputLoop};
-            StdIoController::input_ = std::move(input);
+            std::unique_lock<std::mutex> lock(blocking_request_mutex_);
+            StdIoController::blocking_request_cv_.notify_one();
         }
     };
 
@@ -267,8 +272,13 @@ class StdIoController {
     }
 
     static void inputLoop() {
-        while (run_input_) {
-            extractPacket();
+        while (true) {
+            while (run_input_) {
+                extractPacket();
+            }
+            std::unique_lock<std::mutex> lock (blocking_request_mutex_);
+            blocking_request_cv_.notify_one();
+            blocking_request_cv_.wait(lock);
         }
     }
 };
