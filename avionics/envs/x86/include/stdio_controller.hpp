@@ -20,21 +20,18 @@ class StdIoController {
     // Everything is static but it's not a namespace b/c of the private member
     // variables
   private:
-    typedef uint8_t Id;
+    // static std::mutex istream_mutex_; // lock before accessing istreams_
+    // static std::unordered_map<Id, std::queue<uint8_t>>
+    //     istreams_; // Note - for input only
 
-    // static std::unordered_map<Id, std::mutex> m_mutexes;
-    static std::mutex istream_mutex_; // lock before accessing istreams_
-    static std::unordered_map<Id, std::queue<uint8_t>>
-        istreams_; // Note - for input only
+    // // I got tired of thinking about the best way to pre-compose strings so
+    // // instead I'm just going to lock std::cout
+    // static std::mutex cout_mutex_;
 
-    // I got tired of thinking about the best way to pre-compose strings so
-    // instead I'm just going to lock std::cout
-    static std::mutex cout_mutex_;
+    // static std::thread input_;          // run infinite inputLoop()
+    // static std::atomic_bool run_input_; // controls if input_ is running
 
-    static std::thread input_;          // run infinite inputLoop()
-    static std::atomic_bool run_input_; // controls if input_ is running
-
-    static std::ofstream out_log_;
+    // static std::ofstream out_log_;
 
     static void outputFiltered(uint8_t const c);
     static void output(uint8_t const c);
@@ -58,28 +55,13 @@ class StdIoController {
          **/
       public:
         BlockingRequest(const uint8_t stream_id, const uint8_t *const packet,
-                        const std::size_t packet_len) {
-            // input_ will now run at most once more
-            StdIoController::run_input_ = false;
-            // ensures that at least one more SIM packet exists
-            StdIoController::putPacket(stream_id, packet, packet_len);
-            input_.join(); // so this won't block
-
-            // Keep polling for new packet until response is received.
-            while (istreams_[stream_id].size() == 0) {
-                extractPacket();
-            }
-        }
+                        const std::size_t packet_len);
 
         // Can't copy.
         BlockingRequest(const BlockingRequest &) = delete;
         BlockingRequest &operator=(const BlockingRequest &other) = delete;
 
-        ~BlockingRequest() {
-            StdIoController::run_input_ = true;
-            std::thread input{&StdIoController::inputLoop};
-            StdIoController::input_ = std::move(input);
-        }
+        ~BlockingRequest();
     };
 
   public:
@@ -90,6 +72,7 @@ class StdIoController {
     static void initialize();
 
     constexpr static uint8_t DEV_NULL = 0;
+
     /**
      * @brief Attempts to extract a single character from the specified buffer
      * Id.
@@ -98,21 +81,9 @@ class StdIoController {
      * @param c If read succeeded, the result is written to c.
      * @return True if read succeeded, false if EOF.
      */
-    static bool get(uint8_t id, uint8_t &c) {
-        const std::lock_guard<std::mutex> lock(istream_mutex_);
+    static bool get(uint8_t id, uint8_t &c);
 
-        if (istreams_[id].size() == 0) {
-            return false;
-        }
-        c = istreams_[id].front();
-        istreams_[id].pop();
-        return true;
-    }
-
-    static int available(uint8_t id) {
-        const std::lock_guard<std::mutex> lock(istream_mutex_);
-        return istreams_[id].size();
-    }
+    static int available(uint8_t id);
 
     /**
      * @brief Basic level utility to put a packet into std::cout.
@@ -137,18 +108,7 @@ class StdIoController {
      * @param pin_id ID of the pin being read.
      * @return Read value.
      */
-    static int requestAnalogRead(uint8_t const pin_id) {
-        uint8_t const PACKET_ID = static_cast<uint8_t>(PacketIds::analog_read);
-        BlockingRequest restart(PACKET_ID, &pin_id, 1);
-
-        int val = istreams_[PACKET_ID].front();
-        istreams_[PACKET_ID].pop();
-        val *= 256;
-        val += istreams_[PACKET_ID].front();
-        istreams_[PACKET_ID].pop();
-
-        return val;
-    }
+    static int requestAnalogRead(uint8_t const pin_id);
 
     /**
      * @brief Corresponds to Request Sensor Read packet in Confluence spec.
@@ -157,45 +117,14 @@ class StdIoController {
      * @return vector of sensor measurements.
      */
     static std::vector<float> requestSensorRead(uint8_t sensor_id,
-                                                std::size_t num_floats) {
-        uint8_t const PACKET_ID = static_cast<uint8_t>(PacketIds::sensor_read);
-        BlockingRequest restart(PACKET_ID, &sensor_id, 1);
-
-        std::vector<float> sensor_data;
-        for (std::size_t f = 0; f < num_floats; f++) {
-            uint8_t packetData[FLOAT_SIZE];
-            for (std::size_t i = 0; i < FLOAT_SIZE; i++) {
-                packetData[i] = istreams_[PACKET_ID].front();
-                istreams_[PACKET_ID].pop();
-            }
-            float float_val = charsToFloat(packetData);
-            sensor_data.push_back(float_val);
-        }
-
-        return sensor_data;
-    }
+                                                std::size_t num_floats);
 
     /**
      * @brief Corresponds to Request Time Update package in confluence spec.
      * @param delta_us number of *microseconds* to shift clock foward by.
      * @return the new time in *milliseconds*.
      */
-    static uint32_t requestTimeUpdate(uint32_t delta_us = 0) {
-        auto const PACKET_ID = static_cast<uint8_t>(PacketIds::time_update);
-        uint8_t chars[sizeof(uint32_t)];
-        std::memcpy(chars, &delta_us, sizeof(delta_us));
-        BlockingRequest restart(PACKET_ID, chars, sizeof(delta_us));
-
-        uint8_t packetData[sizeof(uint32_t)];
-        for (std::size_t i = 0; i < sizeof(uint32_t); i++) {
-            packetData[i] = istreams_[PACKET_ID].front();
-            istreams_[PACKET_ID].pop();
-        }
-
-        uint32_t currentTime;
-        std::memcpy(&currentTime, packetData, sizeof(uint32_t));
-        return currentTime;
-    }
+    static uint32_t requestTimeUpdate(uint32_t delta_us = 0);
 
   private:
     /**
@@ -204,71 +133,18 @@ class StdIoController {
      * @param data: an array of 4 chars.
      * @return the floating point representation
      */
-    static float charsToFloat(uint8_t data[4]) {
-        // NOTE Ground station accounts for endianness.
-        float f;
-        std::memcpy(&f, data, FLOAT_SIZE);
-        return f;
-    }
+    static float charsToFloat(uint8_t data[4]);
 
     /**
      * @brief Helper function for configuration packet.
      */
-    static void putConfigPacket() {
-        uint8_t id = 0x01;
-        uint32_t int_test = 0x04030201;
-        float float_test = -2.0; // 0xC000 0000;
+    static void putConfigPacket();
 
-        uint8_t buf[8];
-        std::memmove(buf, &int_test, 4);
-        std::memmove(buf + 4, &float_test, 4);
-        putPacket(id, buf, 8);
-    }
+    static uint8_t getCinForce();
 
-    static uint8_t getCinForce() {
-        uint8_t c;
-        while (true) {
-            c = std::cin.get();
-            if (std::cin.fail()) {
-                std::cin.clear();
-                continue;
-            }
-            return c;
-        }
-    }
+    static uint8_t getFilteredCin();
 
-    static uint8_t getFilteredCin() {
-        uint8_t msb = getCinForce() - 'A';
-        uint8_t lsb = getCinForce() - 'A';
+    static void extractPacket();
 
-        return (msb << 4) | lsb;
-    }
-
-    static void extractPacket() {
-        Id id;
-        uint16_t length;
-        id = getFilteredCin();
-        length = getFilteredCin();
-        length <<= 8;
-        length |= getFilteredCin();
-
-        auto buf = std::vector<uint8_t>();
-        buf.reserve(length);
-        for (int i = 0; i < length; i++) {
-            buf.push_back(getFilteredCin());
-        }
-
-        { // scope for lock-guard
-            const std::lock_guard<std::mutex> lock(istream_mutex_);
-            for (auto j : buf) {
-                istreams_[id].push(j);
-            } // unlock mutex
-        }
-    }
-
-    static void inputLoop() {
-        while (run_input_) {
-            extractPacket();
-        }
-    }
+    static void inputLoop();
 };
